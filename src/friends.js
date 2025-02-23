@@ -1,5 +1,5 @@
 import { db } from './firebase';
-import { collection, addDoc, getDocs, doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, onSnapshot, collection } from 'firebase/firestore';
 
 export const addFriend = async (currentUserId, friendId) => {
   await setDoc(doc(db, 'friends', `${currentUserId}_${friendId}`), {

@@ -1,11 +1,14 @@
-.App {
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
   background-color: #1a1a1a;
   color: #ffffff;
+}
+
+.App {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  font-family: Arial, sans-serif;
-  overflow: hidden;
 }
 
 .logo {
@@ -33,7 +36,6 @@
   padding: 10px;
   overflow-y: auto;
   background-color: #222;
-  transition: width 0.3s ease;
 }
 
 .chat-window {
@@ -43,12 +45,6 @@
   flex-direction: column;
   background-color: #1a1a1a;
   overflow: hidden;
-}
-
-.header {
-  position: absolute;
-  top: 10px;
-  right: 10px;
 }
 
 input, button {
@@ -100,7 +96,6 @@ p:hover {
   cursor: pointer;
 }
 
-/* Mobile layout */
 @media (max-width: 768px) {
   .content {
     flex-direction: column;
@@ -114,10 +109,6 @@ p:hover {
   .chat-window {
     width: 100%;
     height: 60%;
-  }
-  .header {
-    top: 60px;
-    right: 10px;
   }
   input, button {
     width: 100%;

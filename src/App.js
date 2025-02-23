@@ -66,13 +66,20 @@ function App() {
   // 添加好友
   const addFriend = async () => {
     if (friendAddressInput.trim() && friendAddressInput !== walletAddress) {
-      await setDoc(doc(db, 'friends', `${walletAddress}_${friendAddressInput}`), {
-        user1: walletAddress,
-        user2: friendAddressInput,
-        status: 'pending',
-      });
-      setFriendAddressInput('');
-      alert("Friend request sent!");
+      try {
+        await setDoc(doc(db, 'friends', `${walletAddress}_${friendAddressInput}`), {
+          user1: walletAddress,
+          user2: friendAddressInput,
+          status: 'pending',
+        });
+        setFriendAddressInput('');
+        alert("Friend request sent!");
+        loadFriends();
+      } catch (error) {
+        alert("Failed to add friend: " + error.message);
+      }
+    } else {
+      alert("Please enter a valid friend address (not your own)!");
     }
   };
 

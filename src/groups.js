@@ -1,5 +1,5 @@
 import { db } from './firebase';
-import { collection, addDoc, getDocs, doc, setDoc, onSnapshot, updateDoc, arrayUnion } from 'firebase/firestore';
+import { collection, addDoc, doc, updateDoc, onSnapshot, arrayUnion } from 'firebase/firestore';
 
 export const createGroup = async (name, creatorId) => {
   const groupRef = await addDoc(collection(db, 'groups'), {

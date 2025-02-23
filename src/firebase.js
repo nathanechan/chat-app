@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
-import { getDatabase, ref, set, onValue, onDisconnect } from 'firebase/database';
+import { getFirestore } from 'firebase/firestore';
+import { getDatabase } from 'firebase/database';
 
 const firebaseConfig = {
   apiKey: "你的 API Key",
