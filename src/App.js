@@ -71,7 +71,8 @@ function App() {
         await setDoc(doc(db, 'friends', `${walletAddress}_${friendAddressInput}`), {
           user1: walletAddress,
           user2: friendAddressInput,
-          status: 'accepted', // 直接设置为 accepted，避免 pending 状态
+          status: 'accepted', // 直接设置为 accepted
+          createdAt: new Date().toISOString(), // 添加创建时间以便清理
         });
         console.log("Friend added successfully");
         setFriendAddressInput('');
@@ -126,6 +127,25 @@ function App() {
       } else {
         alert("Group not found or already joined!");
       }
+    }
+  };
+
+  // 离开群组
+  const leaveGroup = async (groupId) => {
+    const groupRef = doc(db, 'groups', groupId);
+    const groupDoc = await getDocs(groupRef);
+    if (groupDoc.exists() && groupDoc.data().members.includes(walletAddress)) {
+      await updateDoc(groupRef, {
+        members: arrayRemove(walletAddress), // 假设 arrayRemove 已导入
+      });
+      setGroups(prev => prev.filter(g => g.id !== groupId));
+      if (selectedChat === groupId) {
+        setSelectedChat(null);
+        setMessages([]);
+      }
+      alert("Left group successfully!");
+    } else {
+      alert("Group not found or you are not a member!");
     }
   };
 
@@ -288,49 +308,60 @@ function App() {
           <div className="content">
             <div className="sidebar">
               <h3>Friends & Groups</h3>
-              <div>
-                <h4>Add Friend</h4>
-                <input
-                  type="text"
-                  value={friendAddressInput}
-                  onChange={(e) => setFriendAddressInput(e.target.value)}
-                  placeholder="Enter friend wallet address"
-                />
-                <button onClick={addFriend}>Add Friend</button>
-              </div>
-              <h4>Friend Requests</h4>
-              <p>No friend requests (requests are auto-accepted)</p>
-              <h4>Friend List</h4>
-              {friends.length > 0 ? friends.map(friend => (
-                <div key={friend} className="message" onClick={() => setSelectedChat(friend)}>
-                  {friend.slice(0, 10)}... {isOnline ? '(Online)' : '(Offline)'}
-                </div>
-              )) : <p>No friends</p>}
-              
-              <h4>Create Group</h4>
-              <input
-                type="text"
-                value={groupNameInput}
-                onChange={(e) => setGroupNameInput(e.target.value)}
-                placeholder="Enter group name"
-              />
-              <button onClick={createGroup}>Create</button>
-              <h4>Public Group</h4>
-              <p>No public groups</p>
-              <h4>Join Group</h4>
-              <input
-                type="text"
-                value={groupIdInput}
-                onChange={(e) => setGroupIdInput(e.target.value)}
-                placeholder="Enter group ID"
-              />
-              <button onClick={joinGroup}>Join</button>
-              <h4>Group List</h4>
-              {groups.length > 0 ? groups.map(group => (
-                <div key={group.id} className="message" onClick={() => setSelectedChat(group.id)}>
-                  {group.name} (Members: {group.members.length})
-                </div>
-              )) : <p>No groups</p>}
+              {friends.length > 0 && (
+                <>
+                  <div>
+                    <h4>Add Friend</h4>
+                    <input
+                      type="text"
+                      value={friendAddressInput}
+                      onChange={(e) => setFriendAddressInput(e.target.value)}
+                      placeholder="Enter friend wallet address"
+                    />
+                    <button onClick={addFriend}>Add Friend</button>
+                  </div>
+                  <h4>Friend Requests</h4>
+                  <p>No friend requests (requests are auto-accepted)</p>
+                  <h4>Friend List</h4>
+                  {friends.map(friend => (
+                    <div key={friend} className="message clickable" onClick={() => setSelectedChat(friend)}>
+                      {friend.slice(0, 10)}... {isOnline ? '(Online)' : '(Offline)'}
+                    </div>
+                  ))}
+                </>
+              )}
+              {groups.length > 0 && (
+                <>
+                  <h4>Create Group</h4>
+                  <input
+                    type="text"
+                    value={groupNameInput}
+                    onChange={(e) => setGroupNameInput(e.target.value)}
+                    placeholder="Enter group name"
+                  />
+                  <button onClick={createGroup}>Create</button>
+                  <h4>Public Group</h4>
+                  <p>No public groups</p>
+                  <h4>Join Group</h4>
+                  <input
+                    type="text"
+                    value={groupIdInput}
+                    onChange={(e) => setGroupIdInput(e.target.value)}
+                    placeholder="Enter group ID"
+                  />
+                  <button onClick={joinGroup}>Join</button>
+                  <h4>Group List</h4>
+                  {groups.map(group => (
+                    <div key={group.id} className="message clickable" onClick={() => setSelectedChat(group.id)}>
+                      {group.name} (Members: {group.members.length})
+                      <button onClick={() => leaveGroup(group.id)} style={{ marginLeft: '10px', padding: '2px 8px' }}>Leave</button>
+                    </div>
+                  ))}
+                </>
+              )}
+              {(friends.length === 0 && groups.length === 0) && (
+                <p>No friends or groups yet. Add a friend or create a group to start chatting!</p>
+              )}
             </div>
             <div className="chat-window">
               <div className="message-list">

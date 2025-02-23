@@ -91,9 +91,17 @@ p {
   margin: 5px 0;
 }
 
-p:hover {
-  background-color: #2a2a2a;
+.clickable {
   cursor: pointer;
+  padding: 8px;
+  margin: 5px 0;
+  border-radius: 4px;
+  background-color: #333;
+  transition: background-color 0.2s ease;
+}
+
+.clickable:hover {
+  background-color: #555;
 }
 
 @media (max-width: 768px) {
