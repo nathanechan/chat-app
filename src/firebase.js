@@ -3,13 +3,15 @@ import { getFirestore } from 'firebase/firestore';
 import { getDatabase } from 'firebase/database';
 
 const firebaseConfig = {
-  apiKey: "你的 API Key",
-  authDomain: "你的 authDomain",
-  projectId: "你的 projectId",
-  storageBucket: "你的 storageBucket",
-  messagingSenderId: "你的 messagingSenderId",
-  appId: "你的 appId",
+  apiKey: "AIzaSyBKQIlCgurSKs5l3AejrmpdWDPGnNVbImA",
+  authDomain: "chat-app-eaf5d.firebaseapp.com",
+  projectId: "chat-app-eaf5d",
+  storageBucket: "chat-app-eaf5d.firebasestorage.app",
+  messagingSenderId: "372659120834",
+  appId: "1:372659120834:web:b3c0c9370cb03eb34aa95b",
+  measurementId: "G-6PQDS9ZHNE"
 };
+
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app); // 用于用户关系和群组
