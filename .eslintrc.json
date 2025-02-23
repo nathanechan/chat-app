@@ -1,0 +1,17 @@
+{
+    "env": {
+      "browser": true,
+      "es2021": true
+    },
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ],
+    "parserOptions": {
+      "ecmaVersion": 12,
+      "sourceType": "module"
+    },
+    "rules": {
+      "no-undef": ["warn", { "vars": "all", "args": "after-used", "ignoreRestSiblings": true }]
+    }
+  }

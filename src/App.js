@@ -1,224 +1,214 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ethers } from 'ethers';
 import Peer from 'simple-peer';
-import {
-  addChat, getChats, clearChats, addFriend, getFriends, removeFriend,
-  addRequest, getRequests, updateRequest, addGroup, getGroups, joinGroup,
-  leaveGroup, removeMember, addGroupChat, getGroupChats, clearGroupChats
-} from './db';
+import { 
+  db, rdb 
+} from './firebase';
+import { 
+  collection, addDoc, getDocs, doc, setDoc, onSnapshot, updateDoc, arrayUnion
+} from 'firebase/firestore';
+import { 
+  ref as rdbRef, set, onValue, onDisconnect 
+} from 'firebase/database';
 import './App.css';
 
 function App() {
-  const [walletAddress, setWalletAddress] = useState(localStorage.getItem('walletAddress') || null);
+  const [walletAddress, setWalletAddress] = useState(null);
   const [friends, setFriends] = useState([]);
-  const [requests, setRequests] = useState([]);
   const [groups, setGroups] = useState([]);
-  const [selectedFriend, setSelectedFriend] = useState(null);
-  const [selectedGroup, setSelectedGroup] = useState(null);
+  const [selectedChat, setSelectedChat] = useState(null); // 选中的好友或群组
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [friendAddressInput, setFriendAddressInput] = useState('');
   const [groupNameInput, setGroupNameInput] = useState('');
   const [groupIdInput, setGroupIdInput] = useState('');
-  const [isPublicGroup, setIsPublicGroup] = useState(true);
-  const [peers, setPeers] = useState({});
-  const peerRef = useRef({});
+  const [isOnline, setIsOnline] = useState(false);
+  const peerRefs = useRef({});
+  const [peerConnections, setPeerConnections] = useState({});
 
-  useEffect(() => {
-    if (walletAddress) {
-      loadFriends();
-      loadRequests();
-      loadGroups();
-      if (selectedFriend) loadChats(selectedFriend);
-      if (selectedGroup) loadGroupChats(selectedGroup);
-    }
-  }, [walletAddress, selectedFriend, selectedGroup]);
-
+  // 连接 EVM 钱包
   const connectWallet = async () => {
-    if (window.ethereum) {
-      try {
-        const provider = new ethers.providers.Web3Provider(window.ethereum);
-        await provider.send("eth_requestAccounts", []);
-        const signer = provider.getSigner();
-        const address = await signer.getAddress();
-        setWalletAddress(address);
-        localStorage.setItem('walletAddress', address);
-      } catch (error) {
-        alert("Failed to connect wallet: " + error.message);
-      }
-    } else {
-      alert("Please install MetaMask!");
+    if (!window.ethereum) {
+      alert("Please install MetaMask or connect your wallet!");
+      return;
+    }
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      await provider.send("eth_requestAccounts", []);
+      const signer = await provider.getSigner();
+      const address = await signer.getAddress();
+      setWalletAddress(address);
+      await setDoc(doc(db, 'users', address), {
+        walletAddress: address,
+        createdAt: new Date().toISOString(),
+      }, { merge: true });
+      setOnlineStatus(address, true);
+    } catch (error) {
+      alert("Failed to connect wallet: " + error.message);
     }
   };
 
-  const disconnectWallet = () => {
-    setWalletAddress(null);
-    localStorage.clear();
-    clearChats();
-    clearGroupChats();
-    setMessages([]);
-    setFriends([]);
-    setRequests([]);
-    setGroups([]);
-    setSelectedFriend(null);
-    setSelectedGroup(null);
-    Object.values(peerRef.current).forEach(peer => peer.destroy());
-    setPeers({});
+  // 设置在线状态
+  const setOnlineStatus = (userId, online) => {
+    const statusRef = rdbRef(rdb, `status/${userId}`);
+    set(statusRef, { online });
+    onDisconnect(statusRef).set({ online: false });
   };
 
-  const loadFriends = async () => {
-    const loadedFriends = await getFriends();
-    setFriends(loadedFriends);
+  // 获取在线状态
+  const getOnlineStatus = (userId) => {
+    const statusRef = rdbRef(rdb, `status/${userId}`);
+    onValue(statusRef, (snapshot) => {
+      setIsOnline(snapshot.val()?.online || false);
+    });
   };
 
-  const loadRequests = async () => {
-    const loadedRequests = await getRequests();
-    setRequests(loadedRequests.filter(req => req.toAddress === walletAddress && req.status === 'pending'));
+  // 添加好友
+  const addFriend = async () => {
+    if (friendAddressInput.trim() && friendAddressInput !== walletAddress) {
+      await setDoc(doc(db, 'friends', `${walletAddress}_${friendAddressInput}`), {
+        user1: walletAddress,
+        user2: friendAddressInput,
+        status: 'pending',
+      });
+      setFriendAddressInput('');
+      alert("Friend request sent!");
+    }
   };
 
-  const loadGroups = async () => {
-    const loadedGroups = await getGroups();
-    setGroups(loadedGroups);
+  // 获取好友列表
+  const loadFriends = () => {
+    return onSnapshot(collection(db, 'friends'), (querySnapshot) => {
+      const friendList = querySnapshot.docs
+        .filter(doc => doc.data().user1 === walletAddress || doc.data().user2 === walletAddress)
+        .map(doc => (doc.data().user1 === walletAddress ? doc.data().user2 : doc.data().user1));
+      setFriends(friendList);
+    });
   };
 
-  const loadChats = async (friendAddress) => {
-    const loadedMessages = await getChats(friendAddress);
-    setMessages(loadedMessages);
+  // 创建群组
+  const createGroup = async () => {
+    if (groupNameInput.trim()) {
+      const groupRef = await addDoc(collection(db, 'groups'), {
+        name: groupNameInput,
+        members: [walletAddress],
+        createdBy: walletAddress,
+        createdAt: new Date().toISOString(),
+      });
+      setGroups(prev => [...prev, { id: groupRef.id, name: groupNameInput, members: [walletAddress] }]);
+      setGroupNameInput('');
+      alert("Group created!");
+    }
   };
 
-  const loadGroupChats = async (groupId) => {
-    const loadedMessages = await getGroupChats(groupId);
-    setMessages(loadedMessages);
+  // 加入群组
+  const joinGroup = async () => {
+    if (groupIdInput.trim()) {
+      const groupRef = doc(db, 'groups', groupIdInput);
+      const groupDoc = await getDocs(doc(db, 'groups', groupIdInput));
+      if (groupDoc.exists() && !groupDoc.data().members.includes(walletAddress)) {
+        await updateDoc(groupRef, {
+          members: arrayUnion(walletAddress),
+        });
+        setGroups(prev => [...prev, { id: groupIdInput, ...groupDoc.data(), members: [...groupDoc.data().members, walletAddress] }]);
+        setGroupIdInput('');
+        alert("Joined group!");
+      } else {
+        alert("Group not found or already joined!");
+      }
+    }
   };
 
-  const sendMessage = async () => {
-    if (input.trim()) {
-      if (selectedFriend) {
-        await addChat(selectedFriend, input, true);
-        const peer = peers[selectedFriend];
-        if (peer) {
-          peer.send(JSON.stringify({ type: 'message', content: input, sender: walletAddress }));
-        }
-        loadChats(selectedFriend);
-      } else if (selectedGroup) {
-        await addGroupChat(selectedGroup, walletAddress, input);
-        loadGroupChats(selectedGroup);
+  // 获取群组列表
+  const loadGroups = () => {
+    return onSnapshot(collection(db, 'groups'), (querySnapshot) => {
+      const groupList = querySnapshot.docs
+        .filter(doc => doc.data().members.includes(walletAddress))
+        .map(doc => ({ id: doc.id, ...doc.data() }));
+      setGroups(groupList);
+    });
+  };
+
+  // WebRTC 信令和连接（点对点和群组）
+  const initiatePeerConnection = (targetAddress, isGroup = false) => {
+    const peer = new Peer({ initiator: walletAddress < targetAddress, trickle: false });
+    peerRefs.current[targetAddress] = peer;
+
+    peer.on('signal', (data) => {
+      const signalingRef = rdbRef(rdb, `signaling/${walletAddress}_${targetAddress}${isGroup ? '_group' : ''}`);
+      set(signalingRef, data);
+    });
+
+    peer.on('connect', () => {
+      console.log(`Connected to ${targetAddress}${isGroup ? ' (Group)' : ''}`);
+      setPeerConnections(prev => ({ ...prev, [targetAddress]: peer }));
+    });
+
+    peer.on('data', (data) => {
+      const message = JSON.parse(data);
+      storeMessage(walletAddress, message, targetAddress);
+      setMessages([...getMessages(walletAddress, targetAddress)]);
+    });
+
+    const signalingPath = isGroup ? `signaling/${targetAddress}_${walletAddress}_group` : `signaling/${targetAddress}_${walletAddress}`;
+    onValue(rdbRef(rdb, signalingPath), (snapshot) => {
+      const signalData = snapshot.val();
+      if (signalData && peer) {
+        peer.signal(signalData);
+      }
+    });
+  };
+
+  // 发送消息（点对点或群组）
+  const sendMessage = () => {
+    if (input.trim() && selectedChat) {
+      const message = { text: input, sender: walletAddress, timestamp: new Date().toISOString() };
+      storeMessage(walletAddress, message, selectedChat);
+      setMessages([...getMessages(walletAddress, selectedChat), message]);
+      const peer = peerConnections[selectedChat];
+      if (peer) {
+        peer.send(JSON.stringify(message));
       }
       setInput('');
     }
   };
 
-  const clearHistory = async () => {
-    if (selectedFriend) {
-      await clearChats();
-    } else if (selectedGroup) {
-      await clearGroupChats();
+  // 本地存储对话
+  const storeMessage = (userId, message, targetId) => {
+    const key = `messages_${userId}_${targetId}`;
+    const messages = JSON.parse(localStorage.getItem(key) || '[]');
+    messages.push(message);
+    localStorage.setItem(key, JSON.stringify(messages));
+  };
+
+  const getMessages = (userId, targetId) => {
+    const key = `messages_${userId}_${targetId}`;
+    return JSON.parse(localStorage.getItem(key) || '[]');
+  };
+
+  // 生命周期
+  useEffect(() => {
+    let unsubscribeFriends, unsubscribeGroups;
+    if (walletAddress) {
+      unsubscribeFriends = loadFriends();
+      unsubscribeGroups = loadGroups();
+      setOnlineStatus(walletAddress, true);
+      getOnlineStatus(walletAddress);
     }
-    setMessages([]);
-  };
+    return () => {
+      unsubscribeFriends?.();
+      unsubscribeGroups?.();
+    };
+  }, [walletAddress]);
 
-  const addFriendRequest = async () => {
-    if (friendAddressInput.trim() && friendAddressInput !== walletAddress) {
-      await addRequest(walletAddress, friendAddressInput);
-      setFriendAddressInput('');
-      alert("Friend request sent! Please ask the other party to manually accept (communication pending).");
-      initiatePeerConnection(friendAddressInput);
-      loadRequests();
-    }
-  };
-
-  const acceptRequest = async (requestId, fromAddress) => {
-    await updateRequest(requestId, 'accepted');
-    await addFriend(fromAddress, `User${fromAddress.slice(0, 6)}`);
-    initiatePeerConnection(fromAddress);
-    loadFriends();
-    loadRequests();
-  };
-
-  const rejectRequest = async (requestId) => {
-    await updateRequest(requestId, 'rejected');
-    loadRequests();
-  };
-
-  const deleteFriend = async (address) => {
-    await removeFriend(address);
-    if (peers[address]) {
-      peers[address].destroy();
-      setPeers(prev => { const newPeers = { ...prev }; delete newPeers[address]; return newPeers; });
-    }
-    loadFriends();
-    if (selectedFriend === address) setSelectedFriend(null);
-  };
-
-  const createGroup = async () => {
-    if (groupNameInput.trim()) {
-      const groupId = `${walletAddress}-${Date.now()}`;
-      await addGroup(groupId, groupNameInput, isPublicGroup, walletAddress);
-      setGroupNameInput('');
-      loadGroups();
-    }
-  };
-
-  const joinGroupHandler = async () => {
-    if (groupIdInput.trim()) {
-      await joinGroup(groupIdInput, walletAddress);
-      setGroupIdInput('');
-      loadGroups();
-    }
-  };
-
-  const leaveGroupHandler = async (groupId) => {
-    await leaveGroup(groupId, walletAddress);
-    loadGroups();
-    if (selectedGroup === groupId) setSelectedGroup(null);
-  };
-
-  const kickMember = async (groupId, memberAddress) => {
-    await removeMember(groupId, memberAddress, walletAddress);
-    loadGroups();
-    if (selectedGroup === groupId) loadGroupChats(groupId);
-  };
-
-  const initiatePeerConnection = (friendAddress) => {
-    const peer = new Peer({ initiator: true, trickle: false });
-    peer.on('signal', data => {
-      console.log(`Send this signaling data to ${friendAddress}:`, JSON.stringify(data));
-      alert(`Please manually send this signaling data to ${friendAddress}:\n${JSON.stringify(data)}`);
-    });
-    peer.on('connect', () => {
-      console.log(`Connected to ${friendAddress}`);
-      setPeers(prev => ({ ...prev, [friendAddress]: peer }));
-    });
-    peer.on('data', data => {
-      const msg = JSON.parse(data);
-      if (msg.type === 'message') {
-        addChat(friendAddress, msg.content, false);
-        loadChats(friendAddress);
+  useEffect(() => {
+    if (selectedChat) {
+      setMessages(getMessages(walletAddress, selectedChat));
+      if (!peerRefs.current[selectedChat]) {
+        initiatePeerConnection(selectedChat, groups.some(g => g.id === selectedChat));
       }
-    });
-    peerRef.current[friendAddress] = peer;
-  };
-
-  const connectToPeer = (signalData, friendAddress) => {
-    const peer = new Peer({ initiator: false, trickle: false });
-    peer.signal(signalData);
-    peer.on('signal', data => {
-      console.log(`Reply with this signaling data to ${friendAddress}:`, JSON.stringify(data));
-      alert(`Please manually reply with this signaling data to ${friendAddress}:\n${JSON.stringify(data)}`);
-    });
-    peer.on('connect', () => {
-      console.log(`Connected to ${friendAddress}`);
-      setPeers(prev => ({ ...prev, [friendAddress]: peer }));
-    });
-    peer.on('data', data => {
-      const msg = JSON.parse(data);
-      if (msg.type === 'message') {
-        addChat(friendAddress, msg.content, false);
-        loadChats(friendAddress);
-      }
-    });
-    peerRef.current[friendAddress] = peer;
-  };
+    }
+  }, [selectedChat, walletAddress, groups]);
 
   return (
     <div className="App">
@@ -235,35 +225,24 @@ function App() {
             <div className="sidebar">
               <h3>Friends & Groups</h3>
               <div>
+                <h4>Add Friend</h4>
                 <input
                   type="text"
                   value={friendAddressInput}
                   onChange={(e) => setFriendAddressInput(e.target.value)}
                   placeholder="Enter friend wallet address"
                 />
-                <button onClick={addFriendRequest}>Add Friend</button>
-                <button onClick={() => {
-                  const signal = prompt("Enter signaling data from the other party:");
-                  if (signal) connectToPeer(JSON.parse(signal), friendAddressInput);
-                }}>Connect to Friend</button>
+                <button onClick={addFriend}>Add Friend</button>
               </div>
               <h4>Friend Requests</h4>
-              {requests.length > 0 ? requests.map(req => (
-                <div key={req.id} className="message">
-                  <p>{req.fromAddress.slice(0, 10)}... wants to add you</p>
-                  <button onClick={() => acceptRequest(req.id, req.fromAddress)}>Accept</button>
-                  <button onClick={() => rejectRequest(req.id)}>Reject</button>
-                </div>
-              )) : <p>No requests</p>}
+              <p>No friend requests</p>
               <h4>Friend List</h4>
               {friends.length > 0 ? friends.map(friend => (
-                <div key={friend.address} className="message">
-                  <p onClick={() => { setSelectedFriend(friend.address); setSelectedGroup(null); }}>
-                    {friend.name}
-                  </p>
-                  <button onClick={() => deleteFriend(friend.address)}>Delete</button>
+                <div key={friend} className="message" onClick={() => setSelectedChat(friend)}>
+                  {friend.slice(0, 10)}... {isOnline ? '(Online)' : '(Offline)'}
                 </div>
               )) : <p>No friends</p>}
+              
               <h4>Create Group</h4>
               <input
                 type="text"
@@ -271,15 +250,9 @@ function App() {
                 onChange={(e) => setGroupNameInput(e.target.value)}
                 placeholder="Enter group name"
               />
-              <label>
-                <input
-                  type="checkbox"
-                  checked={isPublicGroup}
-                  onChange={(e) => setIsPublicGroup(e.target.checked)}
-                />
-                Public Group
-              </label>
               <button onClick={createGroup}>Create</button>
+              <h4>Public Group</h4>
+              <p>No public groups</p>
               <h4>Join Group</h4>
               <input
                 type="text"
@@ -287,51 +260,28 @@ function App() {
                 onChange={(e) => setGroupIdInput(e.target.value)}
                 placeholder="Enter group ID"
               />
-              <button onClick={joinGroupHandler}>Join</button>
+              <button onClick={joinGroup}>Join</button>
               <h4>Group List</h4>
               {groups.length > 0 ? groups.map(group => (
-                <div key={group.id} className="message">
-                  <p onClick={() => { setSelectedGroup(group.id); setSelectedFriend(null); }}>
-                    {group.name} ({group.isPublic ? 'Public' : 'Private'})
-                  </p>
-                  <button onClick={() => leaveGroupHandler(group.id)}>Leave</button>
+                <div key={group.id} className="message" onClick={() => setSelectedChat(group.id)}>
+                  {group.name} (Members: {group.members.length})
                 </div>
               )) : <p>No groups</p>}
             </div>
             <div className="chat-window">
               <div className="message-list">
-                <p>Welcome, {walletAddress}!</p>
-                {selectedFriend ? (
-                  messages.map((msg) => (
-                    <div key={msg.id} className="message">
-                      {msg.isSent ? 'You' : selectedFriend.slice(0, 6)}: {msg.message} - {new Date(msg.timestamp).toLocaleTimeString()}
+                <p>Welcome, {walletAddress.slice(0, 10)}...</p>
+                {selectedChat ? (
+                  messages.map((msg, index) => (
+                    <div key={index} className="message">
+                      {msg.sender === walletAddress ? 'You' : (groups.some(g => g.id === selectedChat) ? 'Group Member' : selectedChat.slice(0, 6))}: {msg.text} - {new Date(msg.timestamp).toLocaleTimeString()}
                     </div>
                   ))
-                ) : selectedGroup ? (
-                  <>
-                    {messages.map((msg) => (
-                      <div key={msg.id} className="message">
-                        {msg.sender === walletAddress ? 'You' : msg.sender.slice(0, 6)}: {msg.message} - {new Date(msg.timestamp).toLocaleTimeString()}
-                      </div>
-                    ))}
-                    {groups.find(g => g.id === selectedGroup)?.creator === walletAddress && (
-                      <div>
-                        <h4>Manage Members</h4>
-                        {groups.find(g => g.id === selectedGroup)?.members.map(member => (
-                          member !== walletAddress && (
-                            <p key={member} className="message">
-                              {member.slice(0, 10)}... <button onClick={() => kickMember(selectedGroup, member)}>Kick</button>
-                            </p>
-                          )
-                        ))}
-                      </div>
-                    )}
-                  </>
                 ) : (
                   <p>Select a friend or group to start chatting</p>
                 )}
               </div>
-              {(selectedFriend || selectedGroup) && (
+              {selectedChat && (
                 <div style={{ display: 'flex', gap: '10px', padding: '10px' }}>
                   <input
                     type="text"
@@ -341,12 +291,8 @@ function App() {
                     style={{ flex: 1 }}
                   />
                   <button onClick={sendMessage}>Send</button>
-                  <button onClick={clearHistory}>Clear History</button>
                 </div>
               )}
-            </div>
-            <div className="header">
-              <button onClick={disconnectWallet}>Logout</button>
             </div>
           </div>
         </>
