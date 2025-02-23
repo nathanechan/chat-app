@@ -5,10 +5,10 @@ import {
   db, rdb 
 } from './firebase';
 import { 
-  collection, addDoc, getDocs, doc, setDoc, onSnapshot, updateDoc, arrayUnion
+  collection, addDoc, getDocs, doc, setDoc, onSnapshot, updateDoc, arrayUnion, deleteDoc
 } from 'firebase/firestore';
 import { 
-  ref as rdbRef, set, onValue, onDisconnect 
+  ref as rdbRef, set, onValue, onDisconnect, push 
 } from 'firebase/database';
 import './App.css';
 
@@ -67,15 +67,18 @@ function App() {
   const addFriend = async () => {
     if (friendAddressInput.trim() && friendAddressInput !== walletAddress) {
       try {
+        console.log("Adding friend:", friendAddressInput);
         await setDoc(doc(db, 'friends', `${walletAddress}_${friendAddressInput}`), {
           user1: walletAddress,
           user2: friendAddressInput,
-          status: 'pending',
+          status: 'accepted', // 直接设置为 accepted，避免 pending 状态
         });
+        console.log("Friend added successfully");
         setFriendAddressInput('');
-        alert("Friend request sent!");
-        loadFriends();
+        alert("Friend request sent and accepted automatically!");
+        loadFriends(); // 刷新好友列表
       } catch (error) {
+        console.error("Error adding friend:", error);
         alert("Failed to add friend: " + error.message);
       }
     } else {
@@ -87,7 +90,7 @@ function App() {
   const loadFriends = () => {
     return onSnapshot(collection(db, 'friends'), (querySnapshot) => {
       const friendList = querySnapshot.docs
-        .filter(doc => doc.data().user1 === walletAddress || doc.data().user2 === walletAddress)
+        .filter(doc => (doc.data().user1 === walletAddress || doc.data().user2 === walletAddress) && doc.data().status === 'accepted')
         .map(doc => (doc.data().user1 === walletAddress ? doc.data().user2 : doc.data().user1));
       setFriends(friendList);
     });
@@ -142,8 +145,9 @@ function App() {
     peerRefs.current[targetAddress] = peer;
 
     peer.on('signal', (data) => {
+      console.log("Sending signal data:", data);
       const signalingRef = rdbRef(rdb, `signaling/${walletAddress}_${targetAddress}${isGroup ? '_group' : ''}`);
-      set(signalingRef, data);
+      set(signalingRef, data).catch(error => console.error("Error sending signal:", error));
     });
 
     peer.on('connect', () => {
@@ -157,11 +161,20 @@ function App() {
       setMessages([...getMessages(walletAddress, targetAddress)]);
     });
 
+    peer.on('error', (error) => {
+      console.error("WebRTC error:", error);
+    });
+
+    peer.on('close', () => {
+      console.log("WebRTC connection closed");
+    });
+
     const signalingPath = isGroup ? `signaling/${targetAddress}_${walletAddress}_group` : `signaling/${targetAddress}_${walletAddress}`;
     onValue(rdbRef(rdb, signalingPath), (snapshot) => {
       const signalData = snapshot.val();
       if (signalData && peer) {
-        peer.signal(signalData);
+        console.log("Received signal data:", signalData);
+        peer.signal(signalData).catch(error => console.error("Error signaling peer:", error));
       }
     });
   };
@@ -173,24 +186,66 @@ function App() {
       storeMessage(walletAddress, message, selectedChat);
       setMessages([...getMessages(walletAddress, selectedChat), message]);
       const peer = peerConnections[selectedChat];
-      if (peer) {
-        peer.send(JSON.stringify(message));
+      if (groups.some(g => g.id === selectedChat)) {
+        sendGroupMessage(selectedChat, message); // 广播到群组
+      } else if (peer) {
+        peer.send(JSON.stringify(message)); // 点对点
       }
       setInput('');
     }
   };
 
+  // 群组聊天支持
+  const sendGroupMessage = (groupId, message) => {
+    const groupRef = rdbRef(rdb, `groupMessages/${groupId}`);
+    push(groupRef, { text: message.text, sender: message.sender, timestamp: message.timestamp });
+  };
+
+  useEffect(() => {
+    if (selectedChat && groups.some(g => g.id === selectedChat)) {
+      const groupRef = rdbRef(rdb, `groupMessages/${selectedChat}`);
+      onValue(groupRef, (snapshot) => {
+        const messages = [];
+        snapshot.forEach((childSnapshot) => {
+          messages.push(childSnapshot.val());
+        });
+        setMessages(messages);
+      });
+    }
+  }, [selectedChat, groups]);
+
   // 本地存储对话
   const storeMessage = (userId, message, targetId) => {
     const key = `messages_${userId}_${targetId}`;
-    const messages = JSON.parse(localStorage.getItem(key) || '[]');
+    let messages = JSON.parse(localStorage.getItem(key) || '[]');
     messages.push(message);
+    if (messages.length > 100) {
+      messages = messages.slice(-100); // 保留最后 100 条
+    }
     localStorage.setItem(key, JSON.stringify(messages));
   };
 
   const getMessages = (userId, targetId) => {
     const key = `messages_${userId}_${targetId}`;
     return JSON.parse(localStorage.getItem(key) || '[]');
+  };
+
+  // 清理旧 Firebase 数据（每月运行一次）
+  const cleanupOldData = async () => {
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now.setDate(now.getDate() - 30)).toISOString();
+    const friendsSnapshot = await getDocs(collection(db, 'friends'));
+    friendsSnapshot.forEach(async (doc) => {
+      if (doc.data().createdAt < thirtyDaysAgo) {
+        await deleteDoc(doc.ref);
+      }
+    });
+    const groupsSnapshot = await getDocs(collection(db, 'groups'));
+    groupsSnapshot.forEach(async (doc) => {
+      if (doc.data().createdAt < thirtyDaysAgo) {
+        await deleteDoc(doc.ref);
+      }
+    });
   };
 
   // 生命周期
@@ -201,11 +256,13 @@ function App() {
       unsubscribeGroups = loadGroups();
       setOnlineStatus(walletAddress, true);
       getOnlineStatus(walletAddress);
+      const cleanupInterval = setInterval(cleanupOldData, 1000 * 60 * 60 * 24 * 30); // 每月运行一次
+      return () => {
+        unsubscribeFriends?.();
+        unsubscribeGroups?.();
+        clearInterval(cleanupInterval);
+      };
     }
-    return () => {
-      unsubscribeFriends?.();
-      unsubscribeGroups?.();
-    };
   }, [walletAddress]);
 
   useEffect(() => {
@@ -242,7 +299,7 @@ function App() {
                 <button onClick={addFriend}>Add Friend</button>
               </div>
               <h4>Friend Requests</h4>
-              <p>No friend requests</p>
+              <p>No friend requests (requests are auto-accepted)</p>
               <h4>Friend List</h4>
               {friends.length > 0 ? friends.map(friend => (
                 <div key={friend} className="message" onClick={() => setSelectedChat(friend)}>
